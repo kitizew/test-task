@@ -1,5 +1,6 @@
 from django import forms
 from django.contrib import admin, messages
+from django.core.exceptions import PermissionDenied
 from django.db.models import Count, Q
 from django.shortcuts import redirect
 from django.template.response import TemplateResponse
@@ -45,12 +46,12 @@ class SearchQueryAdmin(admin.ModelAdmin):
     def done(self, obj):
         return obj._done
 
-    @admin.action(description="Запустити пошук ще раз")
+    @admin.action(description="Запустити пошук ще раз", permissions=["change"])
     def run_again(self, request, queryset):
         n = queryset.update(last_run_at=None, locked_at=None)
         self.message_user(request, f"Поставлено в чергу: {n}")
 
-    @admin.action(description="Вимкнути")
+    @admin.action(description="Вимкнути", permissions=["change"])
     def deactivate(self, request, queryset):
         queryset.update(is_active=False)
 
@@ -61,6 +62,8 @@ class SearchQueryAdmin(admin.ModelAdmin):
         ] + super().get_urls()
 
     def bulk_add(self, request):
+        if not self.has_add_permission(request):
+            raise PermissionDenied
         if request.method == "POST":
             form = BulkForm(request.POST)
             if form.is_valid():
@@ -96,7 +99,7 @@ class JobAdmin(admin.ModelAdmin):
     show_full_result_count = False
     actions = ["retry"]
 
-    @admin.action(description="Повторити обробку (status=new)")
+    @admin.action(description="Повторити обробку (status=new)", permissions=["change"])
     def retry(self, request, queryset):
         n = queryset.update(status=Job.Status.NEW, attempts=0, error="")
         self.message_user(request, f"Повернено в чергу: {n}")

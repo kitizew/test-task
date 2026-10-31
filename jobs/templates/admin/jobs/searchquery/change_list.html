@@ -1,5 +1,7 @@
 {% extends "admin/change_list.html" %}
 {% block object-tools-items %}
-  <li><a href="{% url 'admin:jobs_searchquery_bulk_add' %}" class="addlink">Масове додавання</a></li>
+  {% if has_add_permission %}
+    <li><a href="{% url 'admin:jobs_searchquery_bulk_add' %}" class="addlink">Масове додавання</a></li>
+  {% endif %}
   {{ block.super }}
 {% endblock %}
