@@ -1,0 +1,13 @@
+{% extends "admin/change_list.html" %}
+{% block extrahead %}{{ block.super }}<meta http-equiv="refresh" content="30">{% endblock %}
+{% block content %}
+<div style="padding:12px;margin-bottom:12px;background:#264b5d;color:#fff;border-radius:6px">
+  Всього: <b>{{ stats.total|default:0 }}</b> &nbsp;|&nbsp;
+  new: <b>{{ stats.new|default:0 }}</b> &nbsp;|&nbsp;
+  processing: <b>{{ stats.processing|default:0 }}</b> &nbsp;|&nbsp;
+  done: <b>{{ stats.done|default:0 }}</b> &nbsp;|&nbsp;
+  failed: <b>{{ stats.failed|default:0 }}</b> &nbsp;|&nbsp;
+  компаній: <b>{{ companies }}</b>
+</div>
+{{ block.super }}
+{% endblock %}

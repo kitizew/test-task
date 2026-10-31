@@ -1,13 +1,60 @@
+x-app: &app
+  build: .
+  env_file: .env
+  restart: unless-stopped
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+
 services:
   db:
     image: postgres:16
+    restart: unless-stopped
     environment:
-      POSTGRES_DB: linkedin
-      POSTGRES_USER: linkedin
-      POSTGRES_PASSWORD: linkedin
-    ports:
-      - "5432:5432"
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      retries: 10
+
+  migrate:
+    build: .
+    env_file: .env
+    command: python manage.py migrate
+    depends_on:
+      db:
+        condition: service_healthy
+
+  web:
+    <<: *app
+    command: gunicorn config.wsgi:application -b 0.0.0.0:8000 --workers 3
+    volumes:
+      - ./exports:/app/exports
+
+  search:
+    <<: *app
+    command: python manage.py run_search --loop
+
+  details:
+    <<: *app
+    command: python manage.py run_details --loop
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+    depends_on:
+      - web
+
 volumes:
   pgdata:
+  caddy_data:

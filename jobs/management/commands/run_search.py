@@ -1,10 +1,12 @@
 import logging
 import random
 import time
-from datetime import date
+from datetime import date, timedelta
 
 import requests
 from django.core.management.base import BaseCommand
+from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from jobs.models import Job, SearchQuery
@@ -20,6 +22,23 @@ def parse_date(value):
         return None
 
 
+def claim_query():
+    """Бере один непройдений запит і блокує його, щоб інший воркер його не взяв."""
+    now = timezone.now()
+    with transaction.atomic():
+        q = (
+            SearchQuery.objects.select_for_update(skip_locked=True)
+            .filter(is_active=True, last_run_at__isnull=True)
+            .filter(Q(locked_at__isnull=True) | Q(locked_at__lt=now - timedelta(hours=2)))
+            .order_by("id")
+            .first()
+        )
+        if q:
+            q.locked_at = now
+            q.save(update_fields=["locked_at"])
+    return q
+
+
 class Command(BaseCommand):
     help = "Part 1: пошук вакансій і збереження в БД (статус NEW)"
 
@@ -27,18 +46,24 @@ class Command(BaseCommand):
         parser.add_argument("--query-id", type=int, help="Запустити лише один SearchQuery")
         parser.add_argument("--max-start", type=int, default=1000,
                             help="Ліміт зміщення (LinkedIn віддає ~1000 на запит)")
+        parser.add_argument("--loop", action="store_true",
+                            help="Працювати як воркер: чекати нові запити")
 
     def handle(self, *args, **options):
-        queries = SearchQuery.objects.filter(is_active=True)
         if options["query_id"]:
-            queries = queries.filter(pk=options["query_id"])
-
-        if not queries.exists():
-            self.stdout.write("Немає активних пошукових запитів.")
+            for q in SearchQuery.objects.filter(pk=options["query_id"]):
+                self.run_query(q, options["max_start"])
             return
 
-        for query in queries:
-            self.run_query(query, options["max_start"])
+        while True:
+            q = claim_query()
+            if q:
+                self.run_query(q, options["max_start"])
+            elif options["loop"]:
+                time.sleep(60)
+            else:
+                self.stdout.write("Немає запитів у черзі.")
+                break
 
     def run_query(self, query, max_start):
         self.stdout.write(f"▶ {query}")
@@ -85,5 +110,6 @@ class Command(BaseCommand):
             time.sleep(random.uniform(1, 3))
 
         query.last_run_at = timezone.now()
-        query.save(update_fields=["last_run_at"])
+        query.locked_at = None
+        query.save(update_fields=["last_run_at", "locked_at"])
         self.stdout.write(self.style.SUCCESS(f"✔ {query}: нових вакансій {total_new}"))

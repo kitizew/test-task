@@ -10,6 +10,11 @@ from tenacity import (
     wait_exponential,
 )
 
+import os
+proxy = os.environ.get("PROXY_URL")
+if proxy:
+    session.proxies.update({"http": proxy, "https": proxy})
+
 logger = logging.getLogger(__name__)
 
 SEARCH_URL = "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search"

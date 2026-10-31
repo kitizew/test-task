@@ -3,9 +3,10 @@ from django.db import models
 
 class SearchQuery(models.Model):
     keywords = models.CharField(max_length=255)
-    country = models.CharField(max_length=100)
+    country = models.CharField(max_length=255)
     is_active = models.BooleanField(default=True)
     last_run_at = models.DateTimeField(null=True, blank=True)
+    locked_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         unique_together = ("keywords", "country")
@@ -26,11 +27,15 @@ class Company(models.Model):
 
     def __str__(self):
         return self.name
+    
+    class Meta:
+        verbose_name_plural = "companies"
 
 
 class Job(models.Model):
     class Status(models.TextChoices):
         NEW = "new"
+        PROCESSING = "processing"
         DONE = "done"
         FAILED = "failed"
 
@@ -59,6 +64,11 @@ class Job(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
-class Meta:
-    verbose_name_plural = "companies"
 
+locked_at = models.DateTimeField(null=True, blank=True)
+
+class Status(models.TextChoices):
+    NEW = "new"
+    PROCESSING = "processing"
+    DONE = "done"
+    FAILED = "failed"

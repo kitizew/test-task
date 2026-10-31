@@ -9,7 +9,7 @@ https://docs.djangoproject.com/en/6.1/topics/settings/
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.1/ref/settings/
 """
-
+import os
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -19,13 +19,21 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-zyao1p4!!h33#c6rxyg&mob0cy9j7f+)j6io5*55!ftw$1q3-3'
+SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "dev-insecure-key")
+DEBUG = os.environ.get("DJANGO_DEBUG", "0") == "1"
+ALLOWED_HOSTS = os.environ.get("ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
+CSRF_TRUSTED_ORIGINS = [f"https://{h}" for h in ALLOWED_HOSTS
+                        if h not in ("localhost", "127.0.0.1")]
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+MIDDLEWARE.insert(1, "whitenoise.middleware.WhiteNoiseMiddleware")  # одразу після SecurityMiddleware
 
-ALLOWED_HOSTS = []
+STATIC_URL = "static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {"BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"},
+}
 
 
 # Application definition
@@ -76,12 +84,20 @@ WSGI_APPLICATION = 'config.wsgi.application'
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
-        "NAME": "linkedin",
-        "USER": "linkedin",
-        "PASSWORD": "linkedin",
-        "HOST": "localhost",
-        "PORT": "5432",
+        "NAME": os.environ.get("POSTGRES_DB", "linkedin"),
+        "USER": os.environ.get("POSTGRES_USER", "linkedin"),
+        "PASSWORD": os.environ.get("POSTGRES_PASSWORD", "linkedin"),
+        "HOST": os.environ.get("POSTGRES_HOST", "localhost"),
+        "PORT": os.environ.get("POSTGRES_PORT", "5432"),
     }
+}
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {"std": {"format": "%(asctime)s %(levelname)s %(name)s: %(message)s"}},
+    "handlers": {"console": {"class": "logging.StreamHandler", "formatter": "std"}},
+    "root": {"handlers": ["console"], "level": "INFO"},
 }
 
 
