@@ -33,9 +33,9 @@ def lines(text):
 @admin.register(SearchQuery)
 class SearchQueryAdmin(admin.ModelAdmin):
     change_list_template = "admin/jobs/searchquery/change_list.html"
-    list_display = ("keywords", "country", "is_active", "last_run_at", "total", "done")
+    list_display = ("keywords", "country", "filters", "is_active", "last_run_at", "total", "done")
     list_filter = ("is_active", "country")
-    search_fields = ("keywords", "country")
+    search_fields = ("keywords", "country", "filters")
     actions = ["run_again", "deactivate"]
 
     def get_queryset(self, request):
@@ -85,7 +85,6 @@ class SearchQueryAdmin(admin.ModelAdmin):
                     request,
                     f"Створено {len(new)} запитів, пропущено дублів: {len(kws) * len(locs) * len(flt) - len(new)}",
                     messages.SUCCESS,
-                )
                 )
                 return redirect("admin:jobs_searchquery_changelist")
         else:
