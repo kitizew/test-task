@@ -9,8 +9,9 @@ FIELDS = [
     "employment_type", "job_function", "industries", "applicants", "status",
     "description",
 ]
-COMPANY_FIELDS = ["linkedin_id", "name", "url", "website", "industry",
-                  "size", "headquarters"]
+COMPANY_FIELDS = ["linkedin_id", "name", "url", "website", "industry", "size",
+                  "headquarters", "description", "company_type", "founded",
+                  "specialties", "logo_url"]
 
 
 class Command(BaseCommand):

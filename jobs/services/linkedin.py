@@ -1,5 +1,6 @@
 import logging
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, unquote, urlparse
+import html
 
 import requests
 from bs4 import BeautifulSoup
@@ -36,6 +37,10 @@ class RetryableError(Exception):
 
 class NotFoundError(Exception):
     """Вакансію видалено або вона недоступна."""
+
+
+class BlockedError(Exception):
+    """LinkedIn віддав 999 / authwall."""
 
 
 @retry(
@@ -138,3 +143,54 @@ def fetch_job_details(job_id):
             "url": company_url,
         },
     }
+
+COMPANY_URL = "https://www.linkedin.com/company/{slug}"
+
+
+def real_url(href):
+    """Якщо посилання йде через редірект LinkedIn, дістає справжню адресу."""
+    q = parse_qs(urlparse(href).query)
+    return unquote(q["url"][0]) if "url" in q else href
+
+
+def fetch_company_details(slug):
+    r = session.get(COMPANY_URL.format(slug=slug), timeout=20)
+    if r.status_code in (999, 429) or "authwall" in r.url:
+        raise BlockedError(f"HTTP {r.status_code} {r.url}")
+    if r.status_code == 404:
+        raise NotFoundError(slug)
+    r.raise_for_status()
+
+    soup = BeautifulSoup(r.text, "lxml")
+
+    about = {}
+    website = ""
+    for dt in soup.select('[data-test-id="about-us"] dt'):
+        key = dt.get_text(strip=True).lower()
+        dd = dt.find_next_sibling("dd")
+        if not dd:
+            continue
+        about[key] = dd.get_text(" ", strip=True)
+        if key == "website":
+            a = dd.find("a")
+            if a and a.get("href"):
+                website = real_url(a["href"])
+
+    meta_desc = soup.select_one('meta[name="description"]')
+    og_image = soup.select_one('meta[property="og:image"]')
+
+    out = {
+        "website": website,
+        "industry": about.get("industry", ""),
+        "size": about.get("company size", ""),
+        "headquarters": about.get("headquarters", ""),
+        "company_type": about.get("type", ""),
+        "founded": about.get("founded", ""),
+        "specialties": about.get("specialties", ""),
+        "description": meta_desc.get("content", "") if meta_desc else "",
+        "logo_url": og_image.get("content", "") if og_image else "",
+    }
+
+    if not (out["industry"] or out["size"] or out["website"]):
+        raise ValueError(f"Нічого не розпарсилось для {slug}")
+    return out

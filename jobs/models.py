@@ -16,20 +16,37 @@ class SearchQuery(models.Model):
 
 
 class Company(models.Model):
+    class DetailsStatus(models.TextChoices):
+        NEW = "new"
+        PROCESSING = "processing"
+        DONE = "done"
+        FAILED = "failed"
+
     linkedin_id = models.CharField(max_length=64, unique=True)
     name = models.CharField(max_length=255)
     url = models.URLField(max_length=500, blank=True)
-    website = models.URLField(max_length=500, blank=True)
+    website = models.URLField(max_length=1000, blank=True)
     industry = models.CharField(max_length=255, blank=True)
     size = models.CharField(max_length=100, blank=True)
     headquarters = models.CharField(max_length=255, blank=True)
     description = models.TextField(blank=True)
 
-    def __str__(self):
-        return self.name
-    
+    company_type = models.CharField(max_length=100, blank=True)
+    founded = models.CharField(max_length=50, blank=True)
+    specialties = models.TextField(blank=True)
+    logo_url = models.URLField(max_length=1000, blank=True)
+
+    details_status = models.CharField(max_length=10, choices=DetailsStatus.choices,
+                                      default=DetailsStatus.NEW, db_index=True)
+    details_attempts = models.PositiveSmallIntegerField(default=0)
+    details_error = models.TextField(blank=True)
+    details_updated_at = models.DateTimeField(null=True, blank=True)
+
     class Meta:
         verbose_name_plural = "companies"
+
+    def __str__(self):
+        return self.name
 
 
 class Job(models.Model):
