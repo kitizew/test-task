@@ -32,6 +32,8 @@ services:
   web:
     <<: *app
     command: gunicorn config.wsgi:application -b 0.0.0.0:8000 --workers 3
+    ports:
+      - "127.0.0.1:8010:8000"
     volumes:
       - ./exports:/app/exports
 
@@ -43,18 +45,10 @@ services:
     <<: *app
     command: python manage.py run_details --loop
 
-  caddy:
-    image: caddy:2
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile
-      - caddy_data:/data
-    depends_on:
-      - web
+  # Рівно один екземпляр: сторінки компаній LinkedIn чутливі до частоти запитів
+  companies:
+    <<: *app
+    command: python manage.py run_companies --loop
 
 volumes:
   pgdata:
-  caddy_data:
