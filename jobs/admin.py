@@ -18,6 +18,12 @@ class BulkForm(forms.Form):
         widget=forms.Textarea(attrs={"rows": 12, "cols": 60}),
         help_text="Одна локація на рядок: United States, Austin, Texas, United States...",
     )
+    filters = forms.CharField(
+        required=False,
+        widget=forms.Textarea(attrs={"rows": 8, "cols": 60}),
+        help_text="Одна комбінація фільтрів на рядок, напр. f_E=2&f_WT=2. "
+                  "Рядок «-» означає без фільтрів. Порожнє поле = без фільтрів.",
+    )    
 
 
 def lines(text):
@@ -69,14 +75,17 @@ class SearchQueryAdmin(admin.ModelAdmin):
             if form.is_valid():
                 kws = lines(form.cleaned_data["keywords"])
                 locs = lines(form.cleaned_data["locations"])
-                existing = set(SearchQuery.objects.values_list("keywords", "country"))
-                new = [SearchQuery(keywords=k, country=l)
-                       for k in kws for l in locs if (k, l) not in existing]
+                flt = ["" if f == "-" else f for f in lines(form.cleaned_data["filters"])] or [""]
+                existing = set(SearchQuery.objects.values_list("keywords", "country", "filters"))
+                new = [SearchQuery(keywords=k, country=l, filters=f)
+                       for k in kws for l in locs for f in flt
+                       if (k, l, f) not in existing]
                 SearchQuery.objects.bulk_create(new)
                 self.message_user(
                     request,
-                    f"Створено {len(new)} запитів, пропущено дублів: {len(kws) * len(locs) - len(new)}",
+                    f"Створено {len(new)} запитів, пропущено дублів: {len(kws) * len(locs) * len(flt) - len(new)}",
                     messages.SUCCESS,
+                )
                 )
                 return redirect("admin:jobs_searchquery_changelist")
         else:
@@ -113,5 +122,14 @@ class JobAdmin(admin.ModelAdmin):
 
 @admin.register(Company)
 class CompanyAdmin(admin.ModelAdmin):
-    list_display = ("name", "industry", "size", "headquarters")
-    search_fields = ("name",)
+    list_display = ("name", "industry", "size", "headquarters", "website", "details_status")
+    list_filter = ("details_status", "company_type")
+    search_fields = ("name", "linkedin_id")
+    readonly_fields = ("details_updated_at",)
+    actions = ["retry_details"]
+
+    @admin.action(description="Повторити збір даних (status=new)", permissions=["change"])
+    def retry_details(self, request, queryset):
+        n = queryset.update(details_status=Company.DetailsStatus.NEW,
+                            details_attempts=0, details_error="")
+        self.message_user(request, f"Повернено в чергу: {n}")

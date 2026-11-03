@@ -11,6 +11,7 @@ from django.utils import timezone
 
 from jobs.models import Job, SearchQuery
 from jobs.services.linkedin import RetryableError, fetch_search_page
+from urllib.parse import parse_qsl
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +73,10 @@ class Command(BaseCommand):
 
         while start < max_start:
             try:
-                cards = fetch_search_page(query.keywords, query.country, start)
+                cards = fetch_search_page(
+                    query.keywords, query.country, start,
+                    dict(parse_qsl(query.filters)),
+                )
             except (RetryableError, requests.exceptions.RequestException) as e:
                 logger.error("Запит %s, start=%s: %s", query, start, e)
                 self.stderr.write(f"  ✖ помилка на start={start}: {e}. Переходжу далі.")

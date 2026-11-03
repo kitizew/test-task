@@ -75,10 +75,11 @@ def clean_url(url):
     return f"{p.scheme}://{p.netloc}{p.path}"
 
 
-def fetch_search_page(keywords, location, start=0):
+def fetch_search_page(keywords, location, start=0, extra=None):
     """Повертає список словників з базовими даними вакансій."""
-    html = _get(SEARCH_URL, params={"keywords": keywords, "location": location, "start": start})
-    soup = BeautifulSoup(html, "lxml")
+    params = {"keywords": keywords, "location": location, "start": start}
+    params.update(extra or {})
+    html = _get(SEARCH_URL, params=params)
 
     results = []
     for card in soup.select("div.base-card"):

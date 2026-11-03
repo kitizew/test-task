@@ -4,15 +4,17 @@ from django.db import models
 class SearchQuery(models.Model):
     keywords = models.CharField(max_length=255)
     country = models.CharField(max_length=255)
+    filters = models.CharField(max_length=255, blank=True, default="")
     is_active = models.BooleanField(default=True)
     last_run_at = models.DateTimeField(null=True, blank=True)
     locked_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
-        unique_together = ("keywords", "country")
+        unique_together = ("keywords", "country", "filters")
 
     def __str__(self):
-        return f"{self.keywords} / {self.country}"
+        extra = f" [{self.filters}]" if self.filters else ""
+        return f"{self.keywords} / {self.country}{extra}"
 
 
 class Company(models.Model):
@@ -83,9 +85,3 @@ class Job(models.Model):
 
 
 locked_at = models.DateTimeField(null=True, blank=True)
-
-class Status(models.TextChoices):
-    NEW = "new"
-    PROCESSING = "processing"
-    DONE = "done"
-    FAILED = "failed"
