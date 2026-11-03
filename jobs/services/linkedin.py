@@ -154,7 +154,8 @@ def real_url(href):
 
 
 def fetch_company_details(slug):
-    r = session.get(COMPANY_URL.format(slug=slug), timeout=20)
+    r = requests.get(COMPANY_URL.format(slug=slug), headers=HEADERS, timeout=20,
+                     proxies=session.proxies or None)
     if r.status_code in (999, 429) or "authwall" in r.url:
         raise BlockedError(f"HTTP {r.status_code} {r.url}")
     if r.status_code == 404:
@@ -187,7 +188,7 @@ def fetch_company_details(slug):
         "company_type": about.get("type", ""),
         "founded": about.get("founded", ""),
         "specialties": about.get("specialties", ""),
-        "description": meta_desc.get("content", "") if meta_desc else "",
+        "description": html.unescape(meta_desc.get("content", "")) if meta_desc else "",
         "logo_url": og_image.get("content", "") if og_image else "",
     }
 
