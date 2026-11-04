@@ -7,17 +7,18 @@ from django.shortcuts import redirect
 from django.template.response import TemplateResponse
 from django.urls import path
 
+from .locations import US_LOCATIONS
 from .models import Company, Job, SearchQuery
+
+CACHE_KEY = "sq_stats_v3"
 
 
 class BulkForm(forms.Form):
     keywords = forms.CharField(
-        widget=forms.Textarea(attrs={"rows": 8, "cols": 60}),
-        help_text="Одна фраза на рядок: Python Developer, Django Developer...",
-    )
-    locations = forms.CharField(
-        widget=forms.Textarea(attrs={"rows": 12, "cols": 60}),
-        help_text="Одна локація на рядок: United States, Austin, Texas, United States...",
+        label="Ключові слова",
+        widget=forms.Textarea(attrs={"rows": 10, "cols": 60}),
+        help_text="Одне ключове слово на рядок. Для кожного автоматично "
+                  "створюються запити по всіх штатах і великих містах США.",
     )
 
 
@@ -28,63 +29,46 @@ def lines(text):
 @admin.register(SearchQuery)
 class SearchQueryAdmin(admin.ModelAdmin):
     change_list_template = "admin/jobs/searchquery/change_list.html"
-    list_display = ("keywords", "queries_count", "vacancies", "processed", "active")
-    search_fields = ("keywords", "country")
+    list_display = ("keywords", "vacancies")
+    search_fields = ("keywords",)
     ordering = ("keywords", "id")
     list_per_page = 50
     actions = ["run_again", "deactivate", "activate"]
 
+    def has_add_permission(self, request):
+        # стандартну кнопку Add прибрано, додавання лише через "Додати ключове слово"
+        return False
+
+    def changelist_view(self, request, extra_context=None):
+        can_bulk = request.user.has_perm("jobs.add_searchquery")
+        return super().changelist_view(
+            request, {**(extra_context or {}), "can_bulk": can_bulk})
+
     def get_queryset(self, request):
         qs = super().get_queryset(request)
         match = getattr(request, "resolver_match", None)
-        # у списку показуємо один рядок на назву роботи
+        # у списку один рядок на ключове слово
         if match and match.url_name == "jobs_searchquery_changelist":
             first_ids = (SearchQuery.objects.values("keywords")
                          .annotate(m=Min("id")).values("m"))
             qs = qs.filter(id__in=first_ids)
         return qs
 
-    def _get_stats(self):
-        """Зведення по всіх фразах одним проходом, кеш на 60 секунд."""
-        stats = cache.get("sq_stats_v2")
-        if stats is not None:
-            return stats
-
-        counts, active = {}, {}
-        for kw, act in SearchQuery.objects.values_list("keywords", "is_active"):
-            counts[kw] = counts.get(kw, 0) + 1
-            active[kw] = active.get(kw, False) or act
-
-        vac = dict(
-            Job.objects.values_list("queries__keywords")
-            .annotate(n=Count("id", distinct=True))
-        )
-        done = dict(
-            Job.objects.filter(status="done").values_list("queries__keywords")
-            .annotate(n=Count("id", distinct=True))
-        )
-
-        stats = {"counts": counts, "active": active, "vac": vac, "done": done}
-        cache.set("sq_stats_v2", stats, 60)
-        return stats
-
-    @admin.display(description="Запитів")
-    def queries_count(self, obj):
-        return self._get_stats()["counts"].get(obj.keywords, 0)
+    def _get_vacancies(self):
+        data = cache.get(CACHE_KEY)
+        if data is None:
+            data = dict(
+                Job.objects.values_list("queries__keywords")
+                .annotate(n=Count("id", distinct=True))
+            )
+            cache.set(CACHE_KEY, data, 60)
+        return data
 
     @admin.display(description="Вакансій")
     def vacancies(self, obj):
-        return self._get_stats()["vac"].get(obj.keywords, 0)
+        return self._get_vacancies().get(obj.keywords, 0)
 
-    @admin.display(description="Оброблено")
-    def processed(self, obj):
-        return self._get_stats()["done"].get(obj.keywords, 0)
-
-    @admin.display(description="Активні", boolean=True)
-    def active(self, obj):
-        return self._get_stats()["active"].get(obj.keywords, False)
-
-    # дії діють на ВСІ запити вибраної назви, а не лише на видимий рядок
+    # дії діють на ВСІ запити вибраного ключового слова
     @admin.action(description="Запустити пошук ще раз", permissions=["change"])
     def run_again(self, request, queryset):
         kws = list(queryset.values_list("keywords", flat=True))
@@ -95,13 +79,11 @@ class SearchQueryAdmin(admin.ModelAdmin):
     def deactivate(self, request, queryset):
         kws = list(queryset.values_list("keywords", flat=True))
         SearchQuery.objects.filter(keywords__in=kws).update(is_active=False)
-        cache.delete("sq_stats_v2")
 
     @admin.action(description="Увімкнути", permissions=["change"])
     def activate(self, request, queryset):
         kws = list(queryset.values_list("keywords", flat=True))
         SearchQuery.objects.filter(keywords__in=kws).update(is_active=True)
-        cache.delete("sq_stats_v2")
 
     def get_urls(self):
         return [
@@ -110,31 +92,31 @@ class SearchQueryAdmin(admin.ModelAdmin):
         ] + super().get_urls()
 
     def bulk_add(self, request):
-        if not self.has_add_permission(request):
+        if not request.user.has_perm("jobs.add_searchquery"):
             raise PermissionDenied
         if request.method == "POST":
             form = BulkForm(request.POST)
             if form.is_valid():
                 kws = lines(form.cleaned_data["keywords"])
-                locs = lines(form.cleaned_data["locations"])
                 existing = set(
                     SearchQuery.objects.filter(filters="")
                     .values_list("keywords", "country")
                 )
-                new = [SearchQuery(keywords=k, country=l, filters="")
-                       for k in kws for l in locs if (k, l) not in existing]
-                SearchQuery.objects.bulk_create(new)
-                cache.delete("sq_stats_v2")
+                new = [SearchQuery(keywords=k, country=loc, filters="")
+                       for k in kws for loc in US_LOCATIONS
+                       if (k, loc) not in existing]
+                SearchQuery.objects.bulk_create(new, ignore_conflicts=True)
+                cache.delete(CACHE_KEY)
                 self.message_user(
                     request,
-                    f"Створено {len(new)} запитів, пропущено дублів: {len(kws) * len(locs) - len(new)}",
+                    f"Ключових слів: {len(kws)}, створено запитів: {len(new)}",
                     messages.SUCCESS,
                 )
                 return redirect("admin:jobs_searchquery_changelist")
         else:
             form = BulkForm()
         ctx = {**self.admin_site.each_context(request), "form": form,
-               "title": "Масове додавання запитів", "opts": self.model._meta}
+               "title": "Додати ключове слово", "opts": self.model._meta}
         return TemplateResponse(request, "admin/jobs/bulk_add.html", ctx)
 
 
