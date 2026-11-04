@@ -5,9 +5,11 @@ from django.db.models import Count, Q
 from django.shortcuts import redirect
 from django.template.response import TemplateResponse
 from django.urls import path
+from django.db.models import Min
+from django.utils.html import format_html
+from django.utils.safestring import mark_safe
 
-from .models import Company, Job, SearchQuery
-
+from .models import Company, Job, SearchQuery, SearchQueryGroup
 
 class BulkForm(forms.Form):
     keywords = forms.CharField(
@@ -132,3 +134,60 @@ class CompanyAdmin(admin.ModelAdmin):
         n = queryset.update(details_status=Company.DetailsStatus.NEW,
                             details_attempts=0, details_error="")
         self.message_user(request, f"Повернено в чергу: {n}")
+
+
+
+
+FILTER_LABELS = {
+    "f_TPR=r86400": "1д",
+    "f_TPR=r259200": "3д",
+    "f_TPR=r604800": "7д",
+    "f_TPR=r1209600": "14д",
+    "f_TPR=r2592000": "30д",
+}
+
+
+@admin.register(SearchQueryGroup)
+class SearchQueryGroupAdmin(admin.ModelAdmin):
+    list_display = ("keywords", "places", "vacancies", "processed")
+    search_fields = ("keywords",)
+    ordering = ("keywords",)
+    list_per_page = 50
+
+    def get_queryset(self, request):
+        # по одному рядку на кожну унікальну назву роботи
+        first_ids = (SearchQuery.objects.values("keywords")
+                     .annotate(m=Min("id")).values("m"))
+        return super().get_queryset(request).filter(id__in=first_ids)
+
+    @admin.display(description="Міста та фільтри")
+    def places(self, obj):
+        grouped = {}
+        rows = SearchQuery.objects.filter(keywords=obj.keywords).values_list("country", "filters")
+        for country, flt in rows:
+            grouped.setdefault(country, [])
+            if flt:
+                grouped[country].append(FILTER_LABELS.get(flt, flt))
+        lines = []
+        for country, flts in sorted(grouped.items()):
+            suffix = f" [{', '.join(flts)}]" if flts else ""
+            lines.append(format_html("{}{}", country, suffix))
+        return mark_safe("<br>".join(lines))
+
+    @admin.display(description="Вакансій (унікальних)")
+    def vacancies(self, obj):
+        return Job.objects.filter(queries__keywords=obj.keywords).distinct().count()
+
+    @admin.display(description="Оброблено")
+    def processed(self, obj):
+        return (Job.objects.filter(queries__keywords=obj.keywords, status="done")
+                .distinct().count())
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False

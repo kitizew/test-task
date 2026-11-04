@@ -16,6 +16,13 @@ class SearchQuery(models.Model):
         extra = f" [{self.filters}]" if self.filters else ""
         return f"{self.keywords} / {self.country}{extra}"
 
+class SearchQueryGroup(SearchQuery):
+    """Згрупований вигляд пошукових запитів в адмінці (без окремої таблиці)."""
+
+    class Meta:
+        proxy = True
+        verbose_name = "Пошукова фраза (згруповано)"
+        verbose_name_plural = "Пошукові фрази (згруповано)"
 
 class Company(models.Model):
     class DetailsStatus(models.TextChoices):
