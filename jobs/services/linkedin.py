@@ -80,6 +80,7 @@ def fetch_search_page(keywords, location, start=0, extra=None):
     params = {"keywords": keywords, "location": location, "start": start}
     params.update(extra or {})
     html = _get(SEARCH_URL, params=params)
+    soup = BeautifulSoup(html, "lxml")
 
     results = []
     for card in soup.select("div.base-card"):
