@@ -1,24 +1,13 @@
 from django import forms
 from django.contrib import admin, messages
+from django.core.cache import cache
 from django.core.exceptions import PermissionDenied
-from django.db.models import Count, Q
+from django.db.models import Count, Min
 from django.shortcuts import redirect
 from django.template.response import TemplateResponse
 from django.urls import path
-from django.db.models import Min
-
 
 from .models import Company, Job, SearchQuery
-
-
-
-FILTER_LABELS = {
-    "f_TPR=r86400": "1д",
-    "f_TPR=r259200": "3д",
-    "f_TPR=r604800": "7д",
-    "f_TPR=r1209600": "14д",
-    "f_TPR=r2592000": "30д",
-}
 
 
 class BulkForm(forms.Form):
@@ -33,9 +22,9 @@ class BulkForm(forms.Form):
     filters = forms.CharField(
         required=False,
         widget=forms.Textarea(attrs={"rows": 8, "cols": 60}),
-        help_text="Одна комбінація фільтрів на рядок, напр. f_E=2&f_WT=2. "
+        help_text="Одна комбінація фільтрів на рядок, напр. f_TPR=r604800. "
                   "Рядок «-» означає без фільтрів. Порожнє поле = без фільтрів.",
-    )    
+    )
 
 
 def lines(text):
@@ -61,36 +50,57 @@ class SearchQueryAdmin(admin.ModelAdmin):
             qs = qs.filter(id__in=first_ids)
         return qs
 
+    def _get_stats(self):
+        """Усе зведення одним проходом, кеш на 60 секунд."""
+        stats = cache.get("sq_stats")
+        if stats is not None:
+            return stats
+
+        places, counts, active = {}, {}, {}
+        for kw, country, flt, act in SearchQuery.objects.values_list(
+                "keywords", "country", "filters", "is_active"):
+            short = country.replace(", United States", "") or country
+            p = places.setdefault(kw, {})
+            p.setdefault(short, 0)
+            if flt:
+                p[short] += 1
+            counts[kw] = counts.get(kw, 0) + 1
+            active[kw] = active.get(kw, False) or act
+
+        vac = dict(
+            Job.objects.values_list("queries__keywords")
+            .annotate(n=Count("id", distinct=True))
+        )
+        done = dict(
+            Job.objects.filter(status="done").values_list("queries__keywords")
+            .annotate(n=Count("id", distinct=True))
+        )
+
+        stats = {"places": places, "counts": counts, "active": active,
+                 "vac": vac, "done": done}
+        cache.set("sq_stats", stats, 60)
+        return stats
+
     @admin.display(description="Міста та фільтри")
     def places(self, obj):
-        grouped = {}
-        rows = SearchQuery.objects.filter(keywords=obj.keywords).values_list("country", "filters")
-        for country, flt in rows:
-            short = country.replace(", United States", "") or country
-            grouped.setdefault(short, 0)
-            if flt:
-                grouped[short] += 1
-        parts = []
-        for place, n in sorted(grouped.items()):
-            parts.append(f"{place} (+{n} фільтрів)" if n else place)
-        return " · ".join(parts)
+        p = self._get_stats()["places"].get(obj.keywords, {})
+        return " · ".join(f"{k} (+{n} фільтрів)" if n else k for k, n in sorted(p.items()))
 
     @admin.display(description="Запитів")
     def queries_count(self, obj):
-        return SearchQuery.objects.filter(keywords=obj.keywords).count()
+        return self._get_stats()["counts"].get(obj.keywords, 0)
 
     @admin.display(description="Вакансій")
     def vacancies(self, obj):
-        return Job.objects.filter(queries__keywords=obj.keywords).distinct().count()
+        return self._get_stats()["vac"].get(obj.keywords, 0)
 
     @admin.display(description="Оброблено")
     def processed(self, obj):
-        return (Job.objects.filter(queries__keywords=obj.keywords, status="done")
-                .distinct().count())
+        return self._get_stats()["done"].get(obj.keywords, 0)
 
     @admin.display(description="Активні", boolean=True)
     def active(self, obj):
-        return SearchQuery.objects.filter(keywords=obj.keywords, is_active=True).exists()
+        return self._get_stats()["active"].get(obj.keywords, False)
 
     # дії діють на ВСІ запити вибраної назви, а не лише на видимий рядок
     @admin.action(description="Запустити пошук ще раз", permissions=["change"])
@@ -129,6 +139,7 @@ class SearchQueryAdmin(admin.ModelAdmin):
                        for k in kws for l in locs for f in flt
                        if (k, l, f) not in existing]
                 SearchQuery.objects.bulk_create(new)
+                cache.delete("sq_stats")
                 self.message_user(
                     request,
                     f"Створено {len(new)} запитів, пропущено дублів: {len(kws) * len(locs) * len(flt) - len(new)}",
@@ -140,6 +151,7 @@ class SearchQueryAdmin(admin.ModelAdmin):
         ctx = {**self.admin_site.each_context(request), "form": form,
                "title": "Масове додавання запитів", "opts": self.model._meta}
         return TemplateResponse(request, "admin/jobs/bulk_add.html", ctx)
+
 
 @admin.register(Job)
 class JobAdmin(admin.ModelAdmin):
@@ -179,7 +191,3 @@ class CompanyAdmin(admin.ModelAdmin):
         n = queryset.update(details_status=Company.DetailsStatus.NEW,
                             details_attempts=0, details_error="")
         self.message_user(request, f"Повернено в чергу: {n}")
-
-
-
-
