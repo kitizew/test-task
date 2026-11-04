@@ -2,6 +2,7 @@ import logging
 import random
 import time
 from datetime import date, timedelta
+from urllib.parse import parse_qsl, urlencode
 
 import requests
 from django.core.management.base import BaseCommand
@@ -11,9 +12,18 @@ from django.utils import timezone
 
 from jobs.models import Job, SearchQuery
 from jobs.services.linkedin import RetryableError, fetch_search_page
-from urllib.parse import parse_qsl
 
 logger = logging.getLogger(__name__)
+
+# Порядок вимірів: спочатку ті, що ділять видачу на непересічні частини.
+# Значення звір із DevTools (Network -> seeMoreJobPostings/search).
+SPLIT_DIMENSIONS = [
+    ("f_E", ["1", "2", "3", "4", "5", "6"]),
+    ("f_WT", ["1", "2", "3"]),
+    ("f_JT", ["F", "C", "P", "T", "I", "V", "O"]),
+    ("f_TPR", ["r86400", "r604800", "r2592000"]),
+]
+SATURATION = 0.9  # частка від max_start, після якої запит вважається обрізаним
 
 
 def parse_date(value):
@@ -23,8 +33,30 @@ def parse_date(value):
         return None
 
 
+def split_query(query, max_depth):
+    """Створює дочірні запити за першим вільним виміром. Повертає кількість нових."""
+    current = dict(parse_qsl(query.filters))
+    if len(current) >= max_depth:
+        return 0
+    for key, values in SPLIT_DIMENSIONS:
+        if key in current:
+            continue
+        existing = set(
+            SearchQuery.objects.filter(keywords=query.keywords, country=query.country)
+            .values_list("filters", flat=True)
+        )
+        children = []
+        for v in values:
+            f = urlencode({**current, key: v})
+            if f not in existing:
+                children.append(SearchQuery(keywords=query.keywords,
+                                            country=query.country, filters=f))
+        SearchQuery.objects.bulk_create(children, ignore_conflicts=True)
+        return len(children)
+    return 0
+
+
 def claim_query():
-    """Бере один непройдений запит і блокує його, щоб інший воркер його не взяв."""
     now = timezone.now()
     with transaction.atomic():
         q = (
@@ -44,39 +76,41 @@ class Command(BaseCommand):
     help = "Part 1: пошук вакансій і збереження в БД (статус NEW)"
 
     def add_arguments(self, parser):
-        parser.add_argument("--query-id", type=int, help="Запустити лише один SearchQuery")
-        parser.add_argument("--max-start", type=int, default=1000,
-                            help="Ліміт зміщення (LinkedIn віддає ~1000 на запит)")
-        parser.add_argument("--loop", action="store_true",
-                            help="Працювати як воркер: чекати нові запити")
+        parser.add_argument("--query-id", type=int)
+        parser.add_argument("--max-start", type=int, default=1000)
+        parser.add_argument("--loop", action="store_true")
+        parser.add_argument("--no-split", action="store_true",
+                            help="Не розбивати обрізані запити автоматично")
+        parser.add_argument("--max-depth", type=int, default=3,
+                            help="Максимум фільтрів в одному запиті")
 
     def handle(self, *args, **options):
         if options["query_id"]:
             for q in SearchQuery.objects.filter(pk=options["query_id"]):
-                self.run_query(q, options["max_start"])
+                self.run_query(q, options)
             return
 
         while True:
             q = claim_query()
             if q:
-                self.run_query(q, options["max_start"])
+                self.run_query(q, options)
             elif options["loop"]:
                 time.sleep(60)
             else:
                 self.stdout.write("Немає запитів у черзі.")
                 break
 
-    def run_query(self, query, max_start):
+    def run_query(self, query, options):
+        max_start = options["max_start"]
         self.stdout.write(f"▶ {query}")
         start = 0
+        fetched = 0
         total_new = 0
+        extra = dict(parse_qsl(query.filters))
 
         while start < max_start:
             try:
-                cards = fetch_search_page(
-                    query.keywords, query.country, start,
-                    dict(parse_qsl(query.filters)),
-                )
+                cards = fetch_search_page(query.keywords, query.country, start, extra)
             except (RetryableError, requests.exceptions.RequestException) as e:
                 logger.error("Запит %s, start=%s: %s", query, start, e)
                 self.stderr.write(f"  ✖ помилка на start={start}: {e}. Переходжу далі.")
@@ -108,10 +142,16 @@ class Command(BaseCommand):
 
             new = jobs.count() - before
             total_new += new
+            fetched += len(cards)
             self.stdout.write(f"  start={start}: {len(cards)} карток, нових {new}")
 
             start += len(cards)
             time.sleep(random.uniform(1, 3))
+
+        created = 0
+        if not options["no_split"] and fetched >= max_start * SATURATION:
+            created = split_query(query, options["max_depth"])
+            self.stdout.write(f"  ⚡ запит обрізаний ({fetched} карток), створено дочірніх: {created}")
 
         query.last_run_at = timezone.now()
         query.locked_at = None
