@@ -19,12 +19,6 @@ class BulkForm(forms.Form):
         widget=forms.Textarea(attrs={"rows": 12, "cols": 60}),
         help_text="Одна локація на рядок: United States, Austin, Texas, United States...",
     )
-    filters = forms.CharField(
-        required=False,
-        widget=forms.Textarea(attrs={"rows": 8, "cols": 60}),
-        help_text="Одна комбінація фільтрів на рядок, напр. f_TPR=r604800. "
-                  "Рядок «-» означає без фільтрів. Порожнє поле = без фільтрів.",
-    )
 
 
 def lines(text):
@@ -34,7 +28,7 @@ def lines(text):
 @admin.register(SearchQuery)
 class SearchQueryAdmin(admin.ModelAdmin):
     change_list_template = "admin/jobs/searchquery/change_list.html"
-    list_display = ("keywords", "places", "queries_count", "vacancies", "processed", "active")
+    list_display = ("keywords", "queries_count", "vacancies", "processed", "active")
     search_fields = ("keywords", "country")
     ordering = ("keywords", "id")
     list_per_page = 50
@@ -51,8 +45,8 @@ class SearchQueryAdmin(admin.ModelAdmin):
         return qs
 
     def _get_stats(self):
-        """Усе зведення одним проходом, кеш на 60 секунд."""
-        stats = {"counts": counts, "active": active, "vac": vac, "done": done}
+        """Зведення по всіх фразах одним проходом, кеш на 60 секунд."""
+        stats = cache.get("sq_stats_v2")
         if stats is not None:
             return stats
 
@@ -70,11 +64,9 @@ class SearchQueryAdmin(admin.ModelAdmin):
             .annotate(n=Count("id", distinct=True))
         )
 
-        stats = {"places": places, "counts": counts, "active": active,
-                 "vac": vac, "done": done}
-        cache.set("sq_stats", stats, 60)
+        stats = {"counts": counts, "active": active, "vac": vac, "done": done}
+        cache.set("sq_stats_v2", stats, 60)
         return stats
-
 
     @admin.display(description="Запитів")
     def queries_count(self, obj):
@@ -103,11 +95,13 @@ class SearchQueryAdmin(admin.ModelAdmin):
     def deactivate(self, request, queryset):
         kws = list(queryset.values_list("keywords", flat=True))
         SearchQuery.objects.filter(keywords__in=kws).update(is_active=False)
+        cache.delete("sq_stats_v2")
 
     @admin.action(description="Увімкнути", permissions=["change"])
     def activate(self, request, queryset):
         kws = list(queryset.values_list("keywords", flat=True))
         SearchQuery.objects.filter(keywords__in=kws).update(is_active=True)
+        cache.delete("sq_stats_v2")
 
     def get_urls(self):
         return [
@@ -123,16 +117,17 @@ class SearchQueryAdmin(admin.ModelAdmin):
             if form.is_valid():
                 kws = lines(form.cleaned_data["keywords"])
                 locs = lines(form.cleaned_data["locations"])
-                flt = ["" if f == "-" else f for f in lines(form.cleaned_data["filters"])] or [""]
-                existing = set(SearchQuery.objects.values_list("keywords", "country", "filters"))
-                new = [SearchQuery(keywords=k, country=l, filters=f)
-                       for k in kws for l in locs for f in flt
-                       if (k, l, f) not in existing]
+                existing = set(
+                    SearchQuery.objects.filter(filters="")
+                    .values_list("keywords", "country")
+                )
+                new = [SearchQuery(keywords=k, country=l, filters="")
+                       for k in kws for l in locs if (k, l) not in existing]
                 SearchQuery.objects.bulk_create(new)
-                cache.delete("sq_stats")
+                cache.delete("sq_stats_v2")
                 self.message_user(
                     request,
-                    f"Створено {len(new)} запитів, пропущено дублів: {len(kws) * len(locs) * len(flt) - len(new)}",
+                    f"Створено {len(new)} запитів, пропущено дублів: {len(kws) * len(locs) - len(new)}",
                     messages.SUCCESS,
                 )
                 return redirect("admin:jobs_searchquery_changelist")
@@ -146,7 +141,7 @@ class SearchQueryAdmin(admin.ModelAdmin):
 @admin.register(Job)
 class JobAdmin(admin.ModelAdmin):
     change_list_template = "admin/jobs/job/change_list.html"
-    list_display = ("keywords", "queries_count", "vacancies", "processed", "active")
+    list_display = ("title", "company", "location", "status", "attempts", "posted_at", "created_at")
     list_filter = ("status", "queries__country", "employment_type", "seniority")
     search_fields = ("title", "company__name", "linkedin_job_id")
     readonly_fields = ("created_at", "updated_at")
