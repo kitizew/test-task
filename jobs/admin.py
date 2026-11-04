@@ -52,18 +52,12 @@ class SearchQueryAdmin(admin.ModelAdmin):
 
     def _get_stats(self):
         """Усе зведення одним проходом, кеш на 60 секунд."""
-        stats = cache.get("sq_stats")
+        stats = {"counts": counts, "active": active, "vac": vac, "done": done}
         if stats is not None:
             return stats
 
-        places, counts, active = {}, {}, {}
-        for kw, country, flt, act in SearchQuery.objects.values_list(
-                "keywords", "country", "filters", "is_active"):
-            short = country.replace(", United States", "") or country
-            p = places.setdefault(kw, {})
-            p.setdefault(short, 0)
-            if flt:
-                p[short] += 1
+        counts, active = {}, {}
+        for kw, act in SearchQuery.objects.values_list("keywords", "is_active"):
             counts[kw] = counts.get(kw, 0) + 1
             active[kw] = active.get(kw, False) or act
 
@@ -81,10 +75,6 @@ class SearchQueryAdmin(admin.ModelAdmin):
         cache.set("sq_stats", stats, 60)
         return stats
 
-    @admin.display(description="Міста та фільтри")
-    def places(self, obj):
-        p = self._get_stats()["places"].get(obj.keywords, {})
-        return " · ".join(f"{k} (+{n} фільтрів)" if n else k for k, n in sorted(p.items()))
 
     @admin.display(description="Запитів")
     def queries_count(self, obj):
@@ -156,7 +146,7 @@ class SearchQueryAdmin(admin.ModelAdmin):
 @admin.register(Job)
 class JobAdmin(admin.ModelAdmin):
     change_list_template = "admin/jobs/job/change_list.html"
-    list_display = ("title", "company", "location", "status", "attempts", "posted_at", "created_at")
+    list_display = ("keywords", "queries_count", "vacancies", "processed", "active")
     list_filter = ("status", "queries__country", "employment_type", "seniority")
     search_fields = ("title", "company__name", "linkedin_job_id")
     readonly_fields = ("created_at", "updated_at")
