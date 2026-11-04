@@ -6,8 +6,7 @@ from django.shortcuts import redirect
 from django.template.response import TemplateResponse
 from django.urls import path
 from django.db.models import Min
-from django.utils.html import format_html
-from django.utils.safestring import mark_safe
+
 
 from .models import Company, Job, SearchQuery
 
@@ -116,8 +115,31 @@ class SearchQueryAdmin(admin.ModelAdmin):
                  name="jobs_searchquery_bulk_add"),
         ] + super().get_urls()
 
-    # метод bulk_add залиш без змін, як був
-
+    def bulk_add(self, request):
+        if not self.has_add_permission(request):
+            raise PermissionDenied
+        if request.method == "POST":
+            form = BulkForm(request.POST)
+            if form.is_valid():
+                kws = lines(form.cleaned_data["keywords"])
+                locs = lines(form.cleaned_data["locations"])
+                flt = ["" if f == "-" else f for f in lines(form.cleaned_data["filters"])] or [""]
+                existing = set(SearchQuery.objects.values_list("keywords", "country", "filters"))
+                new = [SearchQuery(keywords=k, country=l, filters=f)
+                       for k in kws for l in locs for f in flt
+                       if (k, l, f) not in existing]
+                SearchQuery.objects.bulk_create(new)
+                self.message_user(
+                    request,
+                    f"Створено {len(new)} запитів, пропущено дублів: {len(kws) * len(locs) * len(flt) - len(new)}",
+                    messages.SUCCESS,
+                )
+                return redirect("admin:jobs_searchquery_changelist")
+        else:
+            form = BulkForm()
+        ctx = {**self.admin_site.each_context(request), "form": form,
+               "title": "Масове додавання запитів", "opts": self.model._meta}
+        return TemplateResponse(request, "admin/jobs/bulk_add.html", ctx)
 
 @admin.register(Job)
 class JobAdmin(admin.ModelAdmin):
